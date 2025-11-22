@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: batch-scheduler
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: batch-scheduler
+  namespace: batch-scheduler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: batch-scheduler
+rules:
+  - apiGroups: [""]
+    resources: ["events", "pods", "pods/status", "pods/binding"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["" ]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["" ]
+    resources: ["endpoints", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: batch-scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: batch-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: batch-scheduler
+    namespace: batch-scheduler
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-config
+  namespace: batch-scheduler
+  labels:
+    app: batch-scheduler
+  annotations:
+    description: kube-scheduler configuration with batch permit plugin
+  # configuration for kube-scheduler
+  # reference: https://kubernetes.io/docs/reference/config-api/kube-scheduler-config.v1beta3/
+data:
+  config.yaml: |
+    apiVersion: kubescheduler.config.k8s.io/v1beta3
+    kind: KubeSchedulerConfiguration
+    leaderElection:
+      leaderElect: true
+      resourceName: batch-scheduler
+      resourceNamespace: batch-scheduler
+    profiles:
+      - schedulerName: batch-scheduler
+        plugins:
+          permit:
+            enabled:
+              - name: BatchPermit
+            disabled:
+              - name: "*"
+        pluginConfig:
+          - name: BatchPermit
+            args: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: batch-scheduler
+  namespace: batch-scheduler
+  labels:
+    app: batch-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: batch-scheduler
+  template:
+    metadata:
+      labels:
+        app: batch-scheduler
+    spec:
+      serviceAccountName: batch-scheduler
+      containers:
+        - name: scheduler
+          image: your-registry/batch-scheduler:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/kube-scheduler
+            - --config=/etc/kubernetes/scheduler/config.yaml
+          volumeMounts:
+            - name: scheduler-config
+              mountPath: /etc/kubernetes/scheduler
+      volumes:
+        - name: scheduler-config
+          configMap:
+            name: scheduler-config
+            items:
+              - key: config.yaml
+                path: config.yaml
